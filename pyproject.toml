@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "telegraf-mqtt-tests"
+version = "0.0.1"
+requires-python = ">=3.11"
+dependencies = [
+  "paho-mqtt~=2.1.0",
+  "influxdb-client[ciso]~=1.48.0"
+]
+
+[project.scripts]
+telegraf-mqtt-tests = "telegraf_mqtt_tests.main:main"
+
+[tool.isort]
+profile = "black"
+
+[tool.pytest.ini_options]
+minversion = "7.2"
+addopts = "--strict-markers -s --cache-clear --junitxml=test_report.xml"
+testpaths = ["tests"]
