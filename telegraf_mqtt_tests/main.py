@@ -4,18 +4,41 @@ from os import getenv
 from time import sleep
 from typing import Callable
 
+import docker
 import paho.mqtt.client as mqtt
 from influxdb_client import InfluxDBClient
 from line_protocol_parser import parse_line
 
+MQTT_SERVER_ADDR = "mqtt"
 QOS = 1
 TOPIC = "telegraf"
 
 INFLUXDB_QUERY = """
 from(bucket: "{INFLUX_BUCKET}")
-  |> range(start: -5m)
+  |> range(start: -10m)
   |> filter(fn: (r) => r["_measurement"] == "{TEST_ID}")
 """
+
+
+class DockerNetworkManager:
+    def __init__(self):
+        self.client = docker.from_env()
+        self.internet_network = self.get_network_by_name(
+            "telegraf-mqtt-tests_internet_access"
+        )
+
+    def get_network_by_name(self, name: str):
+        for network in self.client.networks.list():
+            if network.name == name:
+                return network
+
+    def connect_telegraf(self):
+        self.internet_network.connect("telegraf-mqtt-tests-telegraf-1")
+        print("telegraf internet connected")
+
+    def disconnect_telegraf(self):
+        self.internet_network.disconnect("telegraf-mqtt-tests-telegraf-1")
+        print("telegraf internet disconnected")
 
 
 def getenv_or_error(key: str) -> str:
@@ -55,6 +78,7 @@ class Tester:
 
     def __init__(self):
         self.test_id = str(uuid.uuid4())
+        self.docker_network_manager = DockerNetworkManager()
         print(f"test_id: {self.test_id}")
         num = int(getenv_or_error("NUM_MEASUREMENTS"))
         for i in range(num):
@@ -66,10 +90,12 @@ class Tester:
         self.mqttc.on_connect = self.on_connect
         self.mqttc.on_message = self.on_message
 
-        self.mqttc.connect("localhost", 1883, 60)
+        self.mqttc.connect(MQTT_SERVER_ADDR, 1883, 60)
 
         self.mqttc.loop_start()
         sleep(1)
+
+        self.docker_network_manager.disconnect_telegraf()
 
         self.send_measurements()
 
@@ -77,6 +103,8 @@ class Tester:
         sleep(5)
         self.mqttc.loop_stop()
 
+        sleep(10)
+        self.docker_network_manager.connect_telegraf()
         # wait for telegraf to write measurements to file
         delay = int(getenv_or_error("DELAY_BEFORE_CHECKS"))
         sleep(delay)
@@ -127,7 +155,6 @@ class Tester:
             )
         )
         for row in csv_result:
-            print(row)
             if row[8] == self.test_id:
                 val = int(row[-3])
                 self.measurements[val].telegraf_influxdb_output_written = True
