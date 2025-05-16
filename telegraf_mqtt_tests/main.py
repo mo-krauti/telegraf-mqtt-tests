@@ -6,6 +6,7 @@ from typing import Callable
 
 import paho.mqtt.client as mqtt
 from influxdb_client import InfluxDBClient
+from line_protocol_parser import parse_line
 
 QOS = 1
 TOPIC = "telegraf"
@@ -28,24 +29,25 @@ def getenv_or_error(key: str) -> str:
 @dataclass
 class Measurement:
     test_id: str
+    measurement_id: int
     val: float
+    offline: bool = False
     sent: bool = False
     mqtt_received: bool = False
     telegraf_file_output_written: bool = False
     telegraf_influxdb_output_written: bool = False
 
     def influx_line_protocol(self) -> str:
-        return f"{self.test_id},offline=false val={self.val}"
+        if self.offline:
+            offline_str = "true"
+        else:
+            offline_str = "false"
+        return f"{self.test_id},measurement_id={str(self.measurement_id)},offline={offline_str} val={self.val}"  # noqa
 
 
-def parse_val_from_influx_line_protocol(
-    influx_line_measurement: str, with_timestamp=True
-) -> int:
-    if with_timestamp:
-        list_index = -2
-    else:
-        list_index = -1
-    return int(influx_line_measurement.split(" ")[list_index].split("=")[-1])
+def parse_mid_from_influx_line_protocol(influx_line_measurement: str) -> int:
+    line_data = parse_line(influx_line_measurement)
+    return int(line_data["tags"]["measurement_id"])
 
 
 class Tester:
@@ -56,7 +58,9 @@ class Tester:
         print(f"test_id: {self.test_id}")
         num = int(getenv_or_error("NUM_MEASUREMENTS"))
         for i in range(num):
-            self.measurements[i] = Measurement(test_id=self.test_id, val=i)
+            self.measurements[i] = Measurement(
+                test_id=self.test_id, measurement_id=i, val=1
+            )
 
         self.mqttc = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         self.mqttc.on_connect = self.on_connect
@@ -107,7 +111,7 @@ class Tester:
             for line in f.readlines():
                 if self.test_id in line:
                     self.measurements[
-                        parse_val_from_influx_line_protocol(line)
+                        parse_mid_from_influx_line_protocol(line)
                     ].telegraf_file_output_written = True
 
     def check_influxdb_output(self):
@@ -123,8 +127,9 @@ class Tester:
             )
         )
         for row in csv_result:
+            print(row)
             if row[8] == self.test_id:
-                val = int(row[6])
+                val = int(row[-3])
                 self.measurements[val].telegraf_influxdb_output_written = True
 
     def count_measurements_with_condition(
@@ -162,7 +167,7 @@ class Tester:
         # print(msg.topic + " " + str(msg.payload))
         msg_str: str = msg.payload.decode()
         self.measurements[
-            parse_val_from_influx_line_protocol(msg_str, with_timestamp=False)
+            parse_mid_from_influx_line_protocol(msg_str)
         ].mqtt_received = True
 
 
